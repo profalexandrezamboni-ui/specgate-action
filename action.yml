@@ -1,0 +1,61 @@
+name: "SpecGate — OpenAPI & JSON Schema Breaking-Change Gate & SemVer Calculator"
+description: "Deterministic breaking-change detector, SemVer bump calculator, and SOC 2 audit trail gate for OpenAPI 3.x, AsyncAPI & JSON Schema."
+author: "SpecGate"
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  base_spec:
+    description: "Path to the base OpenAPI/AsyncAPI/JSON Schema specification file."
+    required: true
+  head_spec:
+    description: "Path to the head (PR) OpenAPI/AsyncAPI/JSON Schema specification file."
+    required: true
+  specgate_api_key:
+    description: "Optional SpecGate Starter/Team API key (sg_live_...) for cloud PR comments, sign-off overrides, and SOC 2 audit logging."
+    required: false
+    default: ""
+  fail_on_breaking:
+    description: "Exit with code 1 when breaking contract changes are detected without sign-off."
+    required: false
+    default: "true"
+
+outputs:
+  verdict:
+    description: "PASS, FAIL_BREAKING_CHANGE, or PASS_WITH_BREAKING_SIGNOFF"
+    value: ${{ steps.run_specgate.outputs.verdict }}
+  recommended_semver_bump:
+    description: "MAJOR, MINOR, PATCH, or NONE"
+    value: ${{ steps.run_specgate.outputs.recommended_semver_bump }}
+  breaking_changes_count:
+    description: "Number of breaking API contract changes detected"
+    value: ${{ steps.run_specgate.outputs.breaking_changes_count }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run SpecGate Contract Diff Engine
+      id: run_specgate
+      shell: bash
+      env:
+        SPECGATE_BASE: ${{ inputs.base_spec }}
+        SPECGATE_HEAD: ${{ inputs.head_spec }}
+        SPECGATE_FAIL: ${{ inputs.fail_on_breaking }}
+      run: |
+        set -euo pipefail
+        REPORT_FILE="$(mktemp)"
+        EXIT_CODE=0
+        python3 "${{ github.action_path }}/specgate_engine.py" \
+          --base "$SPECGATE_BASE" \
+          --head "$SPECGATE_HEAD" \
+          --json-out "$REPORT_FILE" || EXIT_CODE=$?
+        VERDICT=$(python3 -c "import json; d=json.load(open('$REPORT_FILE')); print(d['verdict'])")
+        BUMP=$(python3 -c "import json; d=json.load(open('$REPORT_FILE')); print(d['recommended_semver_bump'])")
+        BREAKING=$(python3 -c "import json; d=json.load(open('$REPORT_FILE')); print(d['breaking_changes_count'])")
+        echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+        echo "recommended_semver_bump=$BUMP" >> "$GITHUB_OUTPUT"
+        echo "breaking_changes_count=$BREAKING" >> "$GITHUB_OUTPUT"
+        if [ "$SPECGATE_FAIL" = "true" ] && [ "$EXIT_CODE" -ne 0 ]; then
+          exit "$EXIT_CODE"
+        fi
